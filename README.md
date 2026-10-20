@@ -9,7 +9,7 @@ estimating the physical size of an object from a single image.
 - **Dataset:** [bmeivar/MetricVQA](https://huggingface.co/datasets/bmeivar/MetricVQA)
   (331 tape-measured in-the-wild queries with human-verified masks +
   10,482 Objectron-derived queries)
-- **Paper:** [arXiv — Ill-Posed by Design: Probing Evidence Use in VLMs](https://arxiv.org/abs/XXXX.XXXXX)
+- **Paper:** [arXiv — Ill-Posed by Design: Probing Evidence Use in VLMs](https://arxiv.org/abs/2606.24335)
 
 ## Install
 
