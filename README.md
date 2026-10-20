@@ -4,6 +4,8 @@ Code for **"Ill-Posed by Design: Probing Evidence Use in VLMs"**: a diagnostic
 benchmark that asks what evidence a vision-language model actually uses when
 estimating the physical size of an object from a single image.
 
+![Metric VQA intervention suite](assets/teaser.png)
+
 - **Dataset:** [bmeivar/MetricVQA](https://huggingface.co/datasets/bmeivar/MetricVQA)
   (331 tape-measured in-the-wild queries with human-verified masks +
   10,482 Objectron-derived queries)
