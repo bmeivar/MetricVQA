@@ -28,6 +28,7 @@ Rows without a SAM phrase or whose mask is missing are skipped.
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 import numpy as np
@@ -35,7 +36,8 @@ import pandas as pd
 from PIL import Image
 
 import sys
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(os.environ.get("METRICVQA_ROOT",
+                            Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(REPO / "scripts"))
 from build_context_variants import load_mask, slug, apply_keep_mask, GRAY  # noqa: E402
 

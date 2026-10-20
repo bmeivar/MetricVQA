@@ -27,7 +27,8 @@ import pandas as pd
 from PIL import Image
 from tqdm import tqdm
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(os.environ.get("METRICVQA_ROOT",
+                            Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "scripts"))
 

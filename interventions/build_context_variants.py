@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import os
 from pathlib import Path
 
 import numpy as np
@@ -29,8 +30,10 @@ import pandas as pd
 from PIL import Image
 from scipy.ndimage import binary_dilation, gaussian_filter, generate_binary_structure
 
-REPO = Path(__file__).resolve().parent.parent
-IMAGES_DIR = REPO / "images"
+REPO = Path(os.environ.get("METRICVQA_ROOT",
+                            Path(__file__).resolve().parent.parent))
+IMAGES_DIR = (REPO / "itw" / "images"
+              if (REPO / "itw" / "images").is_dir() else REPO / "images")
 MASKS_DIR = REPO / "sam_phrases" / "masks"
 PHRASES_CSV = REPO / "sam_phrases" / "sam_phrases_v1.csv"
 

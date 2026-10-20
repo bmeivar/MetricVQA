@@ -15,7 +15,8 @@ from pathlib import Path
 # ──────────────────────────────────────────────────────────────────────
 # Configuration
 # ──────────────────────────────────────────────────────────────────────
-RESULTS_DIR = Path(__file__).resolve().parent / "results"
+RESULTS_DIR = Path(os.environ.get("METRICVQA_ROOT",
+                                  Path(__file__).resolve().parent)) / "results"
 THRESHOLDS = [0.10, 0.15, 0.20]           # relative-error thresholds
 OUTLIER_MULTIPLIER = 3.0                    # IQR multiplier for outlier detection
 

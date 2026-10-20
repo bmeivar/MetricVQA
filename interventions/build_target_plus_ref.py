@@ -26,6 +26,7 @@ For analysis, the comparison set is:
 from __future__ import annotations
 
 import re
+import os
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -33,7 +34,8 @@ import numpy as np
 from PIL import Image
 from scipy.ndimage import gaussian_filter
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(os.environ.get("METRICVQA_ROOT",
+                            Path(__file__).resolve().parent.parent))
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 

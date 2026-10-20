@@ -399,6 +399,9 @@ def main():
     # Load CSV
     print(f"Loading CSV: {args.csv}")
     df = pd.read_csv(args.csv)
+    # Accept the released Metric VQA schema (question / answer_cm) as well as
+    # the legacy working schema (query / answer).
+    df = df.rename(columns={"question": "query", "answer_cm": "answer"})
     required_cols = {"image", "query", "answer"}
     missing = required_cols.difference(df.columns)
     if missing:

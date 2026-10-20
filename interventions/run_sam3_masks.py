@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import os
 from pathlib import Path
 
 import numpy as np
@@ -31,8 +32,10 @@ import torch
 from PIL import Image
 from tqdm import tqdm
 
-REPO = Path(__file__).resolve().parent.parent
-IMAGES_DIR_DEFAULT = REPO / "images"
+REPO = Path(os.environ.get("METRICVQA_ROOT",
+                            Path(__file__).resolve().parent.parent))
+IMAGES_DIR_DEFAULT = (REPO / "itw" / "images"
+                      if (REPO / "itw" / "images").is_dir() else REPO / "images")
 PHRASES_DEFAULT = REPO / "sam_phrases" / "sam_phrases_v1.csv"
 MASKS_OUT_DEFAULT = REPO / "sam_phrases" / "masks"
 

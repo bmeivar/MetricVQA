@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import os
 from pathlib import Path
 
 import cv2
@@ -23,7 +24,8 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(os.environ.get("METRICVQA_ROOT",
+                            Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(REPO / "scripts"))
 from build_context_variants import load_mask, slug  # noqa: E402
 

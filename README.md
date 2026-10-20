@@ -43,7 +43,8 @@ image-free language-prior probe.
 **2. Generate the intervention canvases**
 
 ```bash
-python interventions/run_sam3_masks.py          # SAM-3 masks from referring phrases
+python interventions/masks_from_release.py      # one-time: released PNG masks -> builders' npz layout
+python interventions/run_sam3_masks.py          # SAM-3 masks from referring phrases (new images only)
 python interventions/build_context_variants.py  # object_only / object_ring / wrong_object / random_mask
 python interventions/build_zoom_variants.py     # zoom-in 1.4x / zoom-out 0.6x
 python interventions/build_distorted_variants.py # radial lens distortion (barrel / pincushion)
