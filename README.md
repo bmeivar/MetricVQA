@@ -55,7 +55,21 @@ python interventions/extract_fractions_gt.py    # well-posed fraction-probe grou
 The released dataset already contains verified masks, so step 1 of mask
 extraction is only needed for new images.
 
-**3. Reproduce the analysis**
+**3. LoRA fine-tuning on the Objectron split**
+
+The release ships the Objectron questions (`objectron/questions.csv`) but not the frames, which
+are under Objectron's license. Extract them once with `data_prep/prepare_data.py --out_dir <dir>`
+(writes `<dir>/images/bike__0000.png`, ...), then:
+
+```bash
+python train.py --model_id Qwen/Qwen2.5-VL-7B-Instruct \
+  --dataset bmeivar/MetricVQA --image_dir <dir>/images
+# or all four paper runs: OBJECTRON_IMAGES=<dir>/images bash launch_train_all.sh
+```
+
+The validation split (seed 42, ~500 questions stratified by category) is the one used in the paper.
+
+**4. Reproduce the analysis**
 
 ```bash
 python analyze_results.py                        # accuracy tables across results/*
@@ -89,7 +103,8 @@ sweep, and the dataset composition figure.
 vlm_eval.py               evaluation harness (handler registry)
 handler_utils.py          shared handler utilities
 text_only_baseline.py     language-prior probe (no image)
-train.py                  LoRA fine-tuning reference (rank 8, alpha 32)
+train.py                  LoRA fine-tuning (rank 8, alpha 16, lr 1e-5, 2 epochs)
+launch_train_all.sh       the four LoRA runs reported in the paper
 interventions/            canvas generation + intervention-specific eval
 analysis/                 statistics behind every number in the paper
 figures/                  paper figure generation

@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import argparse
 import os
-import re
-import json
-import shutil
-import subprocess
 import pandas as pd
 from PIL import Image
 
@@ -15,348 +12,407 @@ from sklearn.model_selection import train_test_split
 
 from transformers import (
     AutoProcessor,
+    AutoModelForImageTextToText,
     TrainingArguments,
     Trainer,
+    TrainerCallback,
     Qwen2_5_VLForConditionalGeneration,
     PaliGemmaForConditionalGeneration,
-    LlavaForConditionalGeneration,
-    LlavaNextForConditionalGeneration,
-    LlavaOnevisionForConditionalGeneration
 )
 from transformers.trainer_utils import get_last_checkpoint
 from peft import get_peft_model, LoraConfig
+import json
 
 try:
     from qwen_vl_utils import process_vision_info
 except ImportError:
     process_vision_info = None
 
-# Hugging Face token retrieval
-# The script will attempt to read the token from the environment variable.
-if "HF_TOKEN" not in os.environ:
-    print("WARNING: HF_TOKEN environment variable not set.")
-    print("Please run `export HF_TOKEN='your_token'` before executing or use `huggingface-cli login`.")
 
+# =============================================================================
+# Per-model LoRA target modules (verified by architecture inspection)
+# =============================================================================
 
-# ==============================================================================
-# CONFIGURATION & HYPERPARAMETERS
-# Centralized configuration block for reproducible methodology and fast iteration.
-# ==============================================================================
-CONFIG = {
-    # Model Selection
-    # Supported: "Qwen/Qwen2.5-VL-7B-Instruct", "Qwen/Qwen2.5-VL-3B-Instruct",
-    #            "google/paligemma-3b-mix-448", "llava-hf/llava-onevision-qwen2-7b-ov-hf"
-    "model_id": "llava-hf/llava-onevision-qwen2-7b-ov-hf", 
-    
-    # Data Paths
-    "questions_file": "Objectron/questions_fixed.csv",
-    "image_dir": "Objectron/images/",
-    "output_dir": "./llava_lora_metric_vqa",
-    "eval_output_dir": "./llava_lora_metric_vqa/objectron_eval_results",
-    
-    # Training Hyperparameters
-    "max_length": 2048,             # 1024 for Qwen, 2048 for LLaVA, 1200 for PaliGemma
-    "batch_size": 1,                # Real batch size (scale based on VRAM)
-    "grad_accum_steps": 4,          # Effective Batch Size = batch_size * grad_accum_steps
-    "learning_rate": 1e-4,          # 1e-4 for 3B models, 5e-6 for 7B models
-    "epochs": 1,
-    
-    # LoRA Capacity (Constant across evaluations for controlled comparison)
-    "lora_r": 8,
-    "lora_alpha": 16,
-    "lora_dropout": 0.05,
-    "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+LORA_TARGETS = {
+    "qwen": {
+        "all": ["qkv", "proj", "gate_proj", "up_proj", "down_proj",
+                "q_proj", "k_proj", "v_proj", "o_proj"],
+        "language_only": ["q_proj", "k_proj", "v_proj", "o_proj",
+                          "gate_proj", "up_proj", "down_proj"],
+    },
+    "llava": {
+        "all": ["q_proj", "k_proj", "v_proj", "o_proj", "out_proj",
+                "gate_proj", "up_proj", "down_proj", "fc1", "fc2"],
+        "language_only": ["q_proj", "k_proj", "v_proj", "o_proj",
+                          "gate_proj", "up_proj", "down_proj"],
+    },
+    "paligemma": {
+        "all": ["q_proj", "k_proj", "v_proj", "o_proj", "out_proj",
+                "gate_proj", "up_proj", "down_proj", "fc1", "fc2"],
+        "language_only": ["q_proj", "k_proj", "v_proj", "o_proj",
+                          "gate_proj", "up_proj", "down_proj"],
+    },
+    "gemma3": {
+        "all": ["q_proj", "k_proj", "v_proj", "o_proj", "out_proj",
+                "gate_proj", "up_proj", "down_proj", "fc1", "fc2"],
+        "language_only": ["q_proj", "k_proj", "v_proj", "o_proj",
+                          "gate_proj", "up_proj", "down_proj"],
+    },
 }
-# ==============================================================================
+
+MAX_LENGTH_DEFAULTS = {"qwen": 1024, "llava": 8192, "paligemma": 1200, "gemma3": 1024}
 
 
-class UnifiedMetricVQADataset(Dataset):
-    """
-    Generalized dataset handler supporting Qwen-VL, LLaVA, and PaliGemma architectures.
-    Dynamically routes formatting based on the processor type and model family.
-    """
-    def __init__(self, data_df, image_dir, processor, model_id, max_length):
+def get_model_family(model_id: str) -> str:
+    lower = model_id.lower()
+    if "llava" in lower:
+        return "llava"
+    if "qwen" in lower:
+        return "qwen"
+    if "paligemma" in lower:
+        return "paligemma"
+    if "gemma-3" in lower or "gemma3" in lower:
+        return "gemma3"
+    raise ValueError(f"Unsupported model: {model_id}")
+
+
+# =============================================================================
+# Dataset
+# =============================================================================
+
+class MetricVQADataset(Dataset):
+    """Returns raw samples; collator handles tokenization."""
+    def __init__(self, data_df, image_dir):
         self.data_df = data_df
         self.image_dir = image_dir
-        self.processor = processor
-        self.model_id = model_id.lower()
-        self.max_length = max_length
 
     def __len__(self):
         return len(self.data_df)
 
     def __getitem__(self, idx):
-        if torch.is_tensor(idx):
-            idx = idx.tolist()
+        row = self.data_df.iloc[idx]
+        img_path = os.path.join(self.image_dir, str(row["image"]))
+        return {
+            "image": Image.open(img_path).convert("RGB"),
+            "query": str(row["query"]),
+            "answer": str(row["answer"]),
+        }
 
-        img_name = str(self.data_df.iloc[idx, 0])
-        img_path = os.path.join(self.image_dir, img_name)
-        
-        query = str(self.data_df.iloc[idx, 1])
-        answer = str(self.data_df.iloc[idx, 2])
 
-        # ---------------------------------------------------------
-        # ARCHITECTURE-SPECIFIC TOKENIZATION & FORMATTING
-        # ---------------------------------------------------------
-        if "llava" in self.model_id:
-            raw_image = Image.open(img_path).convert("RGB")
-            messages = [
-                {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": query}]},
-                {"role": "assistant", "content": [{"type": "text", "text": answer}]}
-            ]
-            text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
-            
-            inputs = self.processor(
-                images=raw_image,
-                text=[text],
-                padding="max_length",
-                max_length=self.max_length,
-                truncation=False,
-                return_tensors="pt"
+class MetricVQACollator:
+    """Batch collator that tokenizes with dynamic padding."""
+    def __init__(self, processor, model_family):
+        self.processor = processor
+        self.model_family = model_family
+
+    def __call__(self, examples):
+        messages_list = []
+        images = []
+
+        for ex in examples:
+            img = ex["image"]
+            query = ex["query"]
+            answer = ex["answer"]
+
+            if self.model_family == "paligemma":
+                messages_list.append({"query": query, "answer": answer})
+                images.append(img)
+                continue
+
+            if self.model_family == "qwen":
+                msgs = [
+                    {"role": "user", "content": [{"type": "image", "image": img}, {"type": "text", "text": query}]},
+                    {"role": "assistant", "content": [{"type": "text", "text": answer}]},
+                ]
+            else:
+                msgs = [
+                    {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": query}]},
+                    {"role": "assistant", "content": [{"type": "text", "text": answer}]},
+                ]
+            messages_list.append(msgs)
+            images.append(img)
+
+        if self.model_family == "paligemma":
+            batch = self.processor(
+                text=["<image> " + m["query"] for m in messages_list],
+                images=images,
+                suffix=[m["answer"] for m in messages_list],
+                padding=True, return_tensors="pt",
             )
-        
-        elif "qwen" in self.model_id:
-            messages = [
-                {"role": "user", "content": [{"type": "image", "image": img_path}, {"type": "text", "text": query}]},
-                {"role": "assistant", "content": [{"type": "text", "text": answer}]}
-            ]
-            text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
-            image_inputs, video_inputs = process_vision_info(messages)
-            
-            inputs = self.processor(
-                text=[text],
-                images=image_inputs,
-                videos=video_inputs,
-                padding="max_length",
-                max_length=self.max_length,
-                truncation=True,
-                return_tensors="pt"
-            )
-
-        elif "paligemma" in self.model_id:
-            raw_image = Image.open(img_path).convert("RGB")
-            # PaliGemma requires explicit <image> tag and handles masking internally via 'suffix'
-            query_text = "<image> " + query
-            
-            inputs = self.processor(
-                text=query_text,
-                images=raw_image,
-                suffix=answer,
-                padding="max_length",
-                max_length=self.max_length,
-                truncation=True,
-                return_tensors="pt"
+        elif self.model_family == "qwen":
+            texts = [self.processor.apply_chat_template(m, tokenize=False) for m in messages_list]
+            image_inputs = [process_vision_info(m)[0] for m in messages_list]
+            batch = self.processor(
+                text=texts, images=image_inputs,
+                padding=True, return_tensors="pt",
             )
         else:
-            raise ValueError(f"Unsupported model architecture: {self.model_id}")
+            texts = [self.processor.apply_chat_template(m, tokenize=False) for m in messages_list]
+            batch = self.processor(
+                text=texts, images=images,
+                padding=True, return_tensors="pt",
+            )
 
-        # ---------------------------------------------------------
-        # TENSOR SQUEEZING & DYNAMIC LABEL MASKING
-        # ---------------------------------------------------------
-        result = {}
-        for key, value in inputs.items():
-            # Processor returns batched tensors (1, seq_len); squeeze to match Dataset expectation
-            result[key] = value.squeeze(0)
-            
-        # Qwen and LLaVA processors do not auto-generate labels or mask padding tokens.
-        # Masking pad tokens with -100 is mathematically required for batch_size > 1 to prevent exploding loss.
-        if "labels" not in result:
-            labels = result["input_ids"].clone()
-            if self.processor.tokenizer.pad_token_id is not None:
-                labels[labels == self.processor.tokenizer.pad_token_id] = -100
-            result["labels"] = labels
-            
-        return result
+        if "labels" not in batch:
+            labels = batch["input_ids"].clone()
+            pad_id = self.processor.tokenizer.pad_token_id
+            if pad_id is not None:
+                labels[labels == pad_id] = -100
+
+            # Mask image token IDs explicitly
+            if self.model_family == "qwen":
+                for tok_id in [151652, 151653, 151655]:
+                    labels[labels == tok_id] = -100
+            else:
+                img_tok_id = self.processor.tokenizer.convert_tokens_to_ids(
+                    self.processor.image_token
+                )
+                labels[labels == img_tok_id] = -100
+
+            # Mask prompt tokens — process prompt WITH images to get correct lengths
+            prompt_examples = []
+            for ex in examples:
+                if self.model_family == "qwen":
+                    msgs = [
+                        {"role": "user", "content": [{"type": "image", "image": ex["image"]}, {"type": "text", "text": ex["query"]}]},
+                    ]
+                else:
+                    msgs = [
+                        {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": ex["query"]}]},
+                    ]
+                prompt_examples.append(msgs)
+
+            prompt_texts = [
+                self.processor.apply_chat_template(m, tokenize=False, add_generation_prompt=True)
+                for m in prompt_examples
+            ]
+
+            if self.model_family == "qwen":
+                prompt_images = [process_vision_info(m)[0] for m in prompt_examples]
+            else:
+                prompt_images = [ex["image"] for ex in examples]
+
+            prompt_batch = self.processor(
+                text=prompt_texts, images=prompt_images,
+                padding=True, return_tensors="pt",
+            )
+            prompt_lens = prompt_batch["attention_mask"].sum(dim=1).tolist()
+
+            seq_len = labels.size(1)
+            for i, plen in enumerate(prompt_lens):
+                plen = min(int(plen), seq_len)
+                labels[i, :plen] = -100
+
+            batch["labels"] = labels
+
+        return batch
 
 
-def data_collator(data):
+# =============================================================================
+# Data loading & stratified splitting
+# =============================================================================
+
+def load_objectron_data(dataset_arg, val_size=500):
+    """Objectron questions as a DataFrame with columns image, query, answer.
+
+    dataset_arg is a local CSV or an HF dataset repo. Two layouts are read: the
+    public release (bmeivar/MetricVQA: objectron/questions.csv with columns
+    image, question, answer_cm; images not redistributed) and the original
+    bmeivar/metric-vqa-objectron (questions_objectron.csv + images/). Rows are
+    identical and in the same order in both, so the seed-42 split is the same.
     """
-    Dynamically stacks all tensor keys returned by the dataset __getitem__.
-    Supports disparate keys across architectures (e.g., token_type_ids, pixel_values).
-    """
-    batch = {}
-    keys = data[0].keys()
-    for key in keys:
-        batch[key] = torch.stack([item[key] for item in data])
-    return batch
+    if os.path.isfile(dataset_arg):
+        csv_path = dataset_arg
+    else:
+        from huggingface_hub import snapshot_download
+        local_dir = snapshot_download(dataset_arg, repo_type="dataset",
+                                      allow_patterns=["objectron/*", "questions_objectron.csv", "images/*"])
+        csv_path = os.path.join(local_dir, "objectron", "questions.csv")
+        if not os.path.isfile(csv_path):
+            csv_path = os.path.join(local_dir, "questions_objectron.csv")
 
+    df = pd.read_csv(csv_path)
+    if "answer_cm" in df.columns:  # release schema
+        df = pd.DataFrame({
+            "image": df["image"].str.replace("images/", "", regex=False),
+            "query": df["question"],
+            "answer": df["answer_cm"],
+        })
+    else:
+        df = df[["image", "query", "answer"]].copy()
+    df["category"] = df["image"].apply(lambda x: str(x).split("__")[0])
+
+    unique_images = df.drop_duplicates(subset=["image"])[["image", "category"]]
+    n_images = len(unique_images)
+    questions_per_image = len(df) / n_images
+    val_images_needed = int(val_size / questions_per_image)
+
+    train_imgs, val_imgs = train_test_split(
+        unique_images, test_size=val_images_needed,
+        random_state=42, stratify=unique_images["category"],
+    )
+
+    train_df = df[df["image"].isin(train_imgs["image"])].reset_index(drop=True)
+    val_df = df[df["image"].isin(val_imgs["image"])].reset_index(drop=True)
+
+    print(f"Dataset: {csv_path}")
+    print(f"Total: {len(df)} questions, {n_images} images, 9 categories")
+    print(f"Train: {len(train_df)} questions ({len(train_imgs)} images)")
+    print(f"Val:   {len(val_df)} questions ({len(val_imgs)} images)")
+    print(f"Val category distribution: {val_df['category'].value_counts().to_dict()}")
+
+    image_dir = os.path.dirname(csv_path)
+    if os.path.isdir(os.path.join(image_dir, "images")):
+        image_dir = os.path.join(image_dir, "images")
+
+    return train_df, val_df, image_dir
+
+
+# =============================================================================
+# Main
+# =============================================================================
 
 def main():
-    print(f"\n{'='*50}\nINITIALIZING UNIFIED VLM TRAINING PIPELINE\n{'='*50}")
-    print(f"Target Architecture: {CONFIG['model_id']}\n")
+    parser = argparse.ArgumentParser(description="LoRA fine-tuning for metric VQA")
+    parser.add_argument("--model_id", required=True, help="HuggingFace model ID")
+    parser.add_argument("--dataset", default="bmeivar/MetricVQA",
+                        help="HF dataset ID or path to local CSV")
+    parser.add_argument("--image_dir", default=None,
+                        help="Directory of Objectron frames (bike__0000.png, ...). Required for "
+                             "bmeivar/MetricVQA, which does not redistribute them; see README.")
+    parser.add_argument("--output_dir", default=None,
+                        help="Output directory for LoRA adapters")
+    parser.add_argument("--lr", type=float, default=1e-5)
+    parser.add_argument("--epochs", type=int, default=2)
+    parser.add_argument("--batch_size", type=int, default=1)
+    parser.add_argument("--grad_accum", type=int, default=4)
+    parser.add_argument("--max_length", type=int, default=None,
+                        help="Max sequence length (auto per model if not set)")
+    parser.add_argument("--lora_r", type=int, default=8)
+    parser.add_argument("--lora_alpha", type=int, default=16)
+    parser.add_argument("--lora_dropout", type=float, default=0.05)
+    parser.add_argument("--lora_target", choices=["all", "language_only"], default="all",
+                        help="'all' = vision+language, 'language_only' = language only")
+    parser.add_argument("--val_size", type=int, default=500,
+                        help="Approximate number of validation questions")
+    args = parser.parse_args()
 
-    processor = AutoProcessor.from_pretrained(CONFIG["model_id"], trust_remote_code=True)
-    
-    # ==========================================================================
-    # MODEL ROUTING & INSTANTIATION
-    # ==========================================================================
-    model_lower = CONFIG["model_id"].lower()
+    family = get_model_family(args.model_id)
+    max_length = args.max_length or MAX_LENGTH_DEFAULTS[family]
+    output_dir = args.output_dir or f"./lora_{args.model_id.split('/')[-1]}"
+
+    print(f"\n{'='*60}")
+    print(f"  LoRA Fine-Tuning: {args.model_id}")
+    print(f"  Target: {args.lora_target} | LR: {args.lr} | Epochs: {args.epochs}")
+    print(f"{'='*60}\n")
+
+    # --- Data ---
+    train_df, val_df, auto_image_dir = load_objectron_data(args.dataset, args.val_size)
+    image_dir = args.image_dir or auto_image_dir
+    first = os.path.join(image_dir, str(train_df["image"].iloc[0]))
+    if not os.path.isfile(first):
+        raise SystemExit(f"Objectron image not found: {first}\nPass --image_dir <dir of Objectron frames>.")
+
+    # --- Model ---
+    processor = AutoProcessor.from_pretrained(args.model_id, trust_remote_code=True)
+
     load_kwargs = {
         "torch_dtype": torch.bfloat16,
-        "device_map": {"": 0},
-        "attn_implementation": "sdpa"
+        "device_map": {"": int(os.environ.get("LOCAL_RANK", 0))},
+        "attn_implementation": "sdpa",
     }
 
-    if "paligemma" in model_lower:
-        model = PaliGemmaForConditionalGeneration.from_pretrained(CONFIG["model_id"], **load_kwargs)
-        
-        # Empirical standard: Freeze vision tower and projector for PaliGemma fine-tuning
-        if hasattr(model, "vision_tower"):
-            for param in model.vision_tower.parameters(): param.requires_grad = False
-            for param in model.multi_modal_projector.parameters(): param.requires_grad = False
-        elif hasattr(model, "model") and hasattr(model.model, "vision_tower"):
-            for param in model.model.vision_tower.parameters(): param.requires_grad = False
-            for param in model.model.multi_modal_projector.parameters(): param.requires_grad = False
-
-    elif "llava" in model_lower:
-        if "onevision" in model_lower:
-            model = LlavaOnevisionForConditionalGeneration.from_pretrained(CONFIG["model_id"], **load_kwargs)
-        elif "next" in model_lower:
-            model = LlavaNextForConditionalGeneration.from_pretrained(CONFIG["model_id"], **load_kwargs)
-        else:
-            model = LlavaForConditionalGeneration.from_pretrained(CONFIG["model_id"], **load_kwargs)
-
-    elif "qwen" in model_lower:
-        model = Qwen2_5_VLForConditionalGeneration.from_pretrained(CONFIG["model_id"], **load_kwargs)
-
+    if family == "paligemma":
+        model = PaliGemmaForConditionalGeneration.from_pretrained(args.model_id, **load_kwargs)
+    elif family == "qwen":
+        model = Qwen2_5_VLForConditionalGeneration.from_pretrained(args.model_id, **load_kwargs)
     else:
-        raise ValueError(f"Model ID {CONFIG['model_id']} not recognized in handler registry.")
+        model = AutoModelForImageTextToText.from_pretrained(
+            args.model_id, trust_remote_code=True, **load_kwargs)
 
-    # ==========================================================================
-    # LoRA ADAPTATION
-    # ==========================================================================
+    # --- LoRA ---
+    target_modules = LORA_TARGETS[family][args.lora_target]
+    print(f"LoRA target modules ({args.lora_target}): {target_modules}")
+
     lora_config = LoraConfig(
-        r=CONFIG["lora_r"],
-        lora_alpha=CONFIG["lora_alpha"],
-        target_modules=CONFIG["target_modules"],
-        lora_dropout=CONFIG["lora_dropout"],
+        r=args.lora_r,
+        lora_alpha=args.lora_alpha,
+        target_modules=target_modules,
+        lora_dropout=args.lora_dropout,
         bias="none",
-        task_type="CAUSAL_LM"
+        task_type="CAUSAL_LM",
     )
     model = get_peft_model(model, lora_config)
+    model.enable_input_require_grads()
     model.print_trainable_parameters()
 
-    # ==========================================================================
-    # DATA PREPARATION & STRATIFIED SPLITTING
-    # ==========================================================================
-    if not os.path.exists(CONFIG["questions_file"]) or not os.path.exists(CONFIG["image_dir"]):
-        print(f"ERROR: Data paths not found. Ensure {CONFIG['questions_file']} and {CONFIG['image_dir']} exist.")
-        exit(1)
+    # --- Datasets ---
+    train_dataset = MetricVQADataset(train_df, image_dir)
+    val_dataset = MetricVQADataset(val_df, image_dir)
+    collator = MetricVQACollator(processor, family)
 
-    full_df = pd.read_csv(CONFIG["questions_file"])
-    filename_col = full_df.columns[0]
-    full_df['class_name'] = full_df[filename_col].apply(lambda x: str(x).split('__')[0])
-    
-    # Establish a holdout baseline strictly on unique images to prevent data leakage.
-    # Split the data into train/val/test sets (80/10/10%) and stratify by class_name 
-    # to maintain proportional class distribution.
-    unique_images = full_df.drop_duplicates(subset=[filename_col])[[filename_col, 'class_name']]
-    
-    train_imgs, temp_imgs = train_test_split(unique_images, test_size=0.2, random_state=42, stratify=unique_images['class_name'])
-    val_imgs, test_imgs = train_test_split(temp_imgs, test_size=0.5, random_state=42, stratify=temp_imgs['class_name'])
-
-    train_df = full_df[full_df[filename_col].isin(train_imgs[filename_col])].reset_index(drop=True)
-    val_df = full_df[full_df[filename_col].isin(val_imgs[filename_col])].reset_index(drop=True)
-    test_df = full_df[full_df[filename_col].isin(test_imgs[filename_col])].reset_index(drop=True)
-
-    print("\n--- Data Split Verification ---")
-    print(f"Total samples: {len(full_df)}")
-    print(f"Training samples: {len(train_df)} ({len(train_df)/len(full_df):.1%})")
-    print(f"Validation samples: {len(val_df)} ({len(val_df)/len(full_df):.1%})")
-    print(f"Test samples: {len(test_df)} ({len(test_df)/len(full_df):.1%})")
-    
-    # Integrity Check
-    missing_val_images = sum([1 for img_name in val_df.iloc[:, 0] if not os.path.exists(os.path.join(CONFIG["image_dir"], str(img_name)))])
-    if missing_val_images > 0:
-        print(f"WARNING: {missing_val_images} missing validation images. Check data pipeline.")
-    print("-----------------------------\n")
-
-    # Preserve test set for downstream vlm_eval.py execution
-    test_set_path = "test_set.csv"
-    eval_test_df = test_df.rename(columns={test_df.columns[0]: "image"})
-    eval_test_df[["image", "query", "answer"]].to_csv(test_set_path, index=False)
-
-    train_dataset = UnifiedMetricVQADataset(train_df, CONFIG["image_dir"], processor, CONFIG["model_id"], CONFIG["max_length"])
-    val_dataset = UnifiedMetricVQADataset(val_df, CONFIG["image_dir"], processor, CONFIG["model_id"], CONFIG["max_length"])
-
-    # ==========================================================================
-    # HUGGING FACE TRAINER INSTANTIATION
-    # ==========================================================================
+    # --- Trainer ---
     training_args = TrainingArguments(
-        output_dir=CONFIG["output_dir"],
+        output_dir=output_dir,
         bf16=True,
-        per_device_train_batch_size=CONFIG["batch_size"],
+        per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=1,
-        gradient_accumulation_steps=CONFIG["grad_accum_steps"],
+        gradient_accumulation_steps=args.grad_accum,
         gradient_checkpointing=True,
-        num_train_epochs=CONFIG["epochs"],
-        learning_rate=CONFIG["learning_rate"],
-        report_to="tensorboard",
+        num_train_epochs=args.epochs,
+        learning_rate=args.lr,
+        report_to="none",
+        logging_dir=os.path.join(output_dir, "logs"),
         logging_steps=10,
         save_strategy="steps",
-        save_steps=100,
+        save_steps=200,
         eval_strategy="steps",
-        eval_steps=100,
-        save_total_limit=5,
-        load_best_model_at_end=True,
-        metric_for_best_model="eval_loss",
-        greater_is_better=False,
-        remove_unused_columns=False
+        eval_steps=200,
+        save_total_limit=3,
+        load_best_model_at_end=False,
+        remove_unused_columns=False,
     )
+
+    # --- Logging callback ---
+    log_file = os.path.join(output_dir, "train_log.jsonl")
+    os.makedirs(output_dir, exist_ok=True)
+
+    class JSONLogCallback(TrainerCallback):
+        def on_log(self, args, state, control, logs=None, **kwargs):
+            if logs:
+                entry = {"step": state.global_step, "epoch": state.epoch, **logs}
+                with open(log_file, "a") as f:
+                    f.write(json.dumps(entry) + "\n")
 
     trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
-        data_collator=data_collator,
+        data_collator=collator,
+        callbacks=[JSONLogCallback()],
     )
 
-    last_checkpoint = get_last_checkpoint(training_args.output_dir)
+    last_checkpoint = get_last_checkpoint(output_dir) if os.path.isdir(output_dir) else None
     if last_checkpoint:
-        print(f"*** Resuming training from checkpoint: {last_checkpoint} ***")
+        print(f"Resuming from checkpoint: {last_checkpoint}")
 
     trainer.train(resume_from_checkpoint=last_checkpoint)
-    
-    final_model_path = f"{CONFIG['output_dir']}/best_model"
-    trainer.save_model(final_model_path)
-    print(f"\nModel and adapter weights successfully saved to {final_model_path}")
 
-    # Flush VRAM before launching the evaluation subprocess
-    del trainer
-    del model
-    torch.cuda.empty_cache()
+    # Save last model (current state after final step)
+    trainer.save_model(f"{output_dir}/last_model")
+    print(f"\nLast model saved to {output_dir}/last_model")
 
-    # ==========================================================================
-    # FINAL EVALUATION INVOCATION
-    # ==========================================================================
-    print("\n" + "="*50)
-    print("      STARTING FINAL EVALUATION ON 10% TEST SET")
-    print("="*50 + "\n")
-
-    if os.path.exists(CONFIG["eval_output_dir"]):
-        shutil.rmtree(CONFIG["eval_output_dir"])
-
-    eval_command = [
-        "python", "vlm_eval.py",
-        "--model", CONFIG["model_id"],
-        "--csv", test_set_path,
-        "--image-dir", CONFIG["image_dir"],
-        "--output-dir", CONFIG["eval_output_dir"],
-        "--lora_path", final_model_path,
-        "--use_lora",
-        "--device", "0"
-    ]
-
-    try:
-        subprocess.run(eval_command, check=True)
-        print("Evaluation script completed successfully.\n")
-        
-    except subprocess.CalledProcessError as e:
-        print(f"\nERROR: Evaluation script failed with exit code {e.returncode}.")
-        print(f"STDOUT:\n{e.stdout}")
-        print(f"STDERR:\n{e.stderr}")
+    # Save best model (lowest eval_loss checkpoint)
+    best_ckpt = trainer.state.best_model_checkpoint
+    if best_ckpt:
+        import shutil
+        shutil.copytree(best_ckpt, f"{output_dir}/best_model", dirs_exist_ok=True)
+        print(f"Best model saved to {output_dir}/best_model (from {best_ckpt})")
+    else:
+        trainer.save_model(f"{output_dir}/best_model")
+        print(f"Best model saved to {output_dir}/best_model (same as last)")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
