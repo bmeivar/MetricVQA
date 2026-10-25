@@ -30,7 +30,7 @@ import numpy as np
 import pandas as pd
 
 REPO = Path(os.environ.get("METRICVQA_ROOT", "."))
-sys.path.insert(0, str(REPO / "paper/emnlp_scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # fdr_analysis.py
 import fdr_analysis as base  # loaders, MODELS, CTX_MAP, CONDITIONS
 
 MOVE_THRESH = np.log(1.10)   # "materially changed" = >10% shift in the number
@@ -106,8 +106,12 @@ def main():
                 "median_ratio": round(float(np.exp(direction)), 3),
             })
 
+    if not rows:
+        raise SystemExit("no (model, contrast) pair has >= 50 paired predictions in "
+                         f"{REPO / 'results'}; run the intervention evaluations first")
     df = pd.DataFrame(rows)
     out = REPO / "results" / "prediction_displacement.csv"
+    out.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(out, index=False)
     print(f"wrote {out}  ({len(df)} model x contrast cells)\n")
 

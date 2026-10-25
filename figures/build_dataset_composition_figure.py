@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 import os
+import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -22,6 +23,9 @@ import pandas as pd
 
 HERE = Path(__file__).parent
 REPO = Path(os.environ.get("METRICVQA_ROOT", "."))
+sys.path.insert(0, str(HERE.parent))  # release_data
+from release_data import FIGS, load_itw  # noqa: E402
+FIGS.mkdir(parents=True, exist_ok=True)
 
 
 # ─── ITW bucketing ─────────────────────────────────────────────────────────
@@ -124,7 +128,7 @@ def bucket_itw(query: str) -> tuple[str, str]:
 
 
 # ─── load each split ───────────────────────────────────────────────────────
-itw = pd.read_csv(REPO / "questions_v2.csv")
+itw = load_itw()
 buckets_fines = itw["query"].astype(str).apply(bucket_itw)
 itw["bucket"] = buckets_fines.apply(lambda t: t[0])
 itw["fine"]   = buckets_fines.apply(lambda t: t[1])
@@ -140,9 +144,8 @@ print(f"ITW: {len(itw_fine_stats)} distinct fine categories")
 print(itw_fine_stats.head(15).to_string(index=False))
 
 # Objectron: extract category from filename prefix (bike__XXXX.png → bike)
-obj_df = pd.read_csv(REPO / "results/objectron_chatgpt5.5_prior/predictions.csv")
-obj_df["category"] = obj_df["image"].str.split("__").str[0]
-obj_df["answer"] = pd.to_numeric(obj_df["answer"], errors="coerce")
+obj_df = pd.read_csv(REPO / "objectron" / "questions.csv")  # released Objectron split
+obj_df["answer"] = pd.to_numeric(obj_df["answer_cm"], errors="coerce")
 obj_fine_stats = (
     obj_df.groupby("category")
           .agg(n=("answer", "count"), mean_gt=("answer", "mean"))
@@ -300,6 +303,6 @@ cb.ax.tick_params(labelsize=8)
 # suptitle removed: LaTeX caption is the figure's only title
 # gridspec already places everything; tight_layout would re-add padding
 
-OUT = HERE.parent / "emnlp_paper" / "figs" / "dataset_composition.pdf"
+OUT = FIGS / "dataset_composition.pdf"
 fig.savefig(OUT, bbox_inches="tight")
 print(f"\nwrote {OUT}")

@@ -41,6 +41,9 @@ def main():
         reader = csv.DictReader(f)
         for r in reader:
             if r.get("image", "").strip():
+                if "answer_cm" in r:  # released schema -> image / query / answer
+                    r = {**r, "image": r["image"].replace("images/", "", 1),
+                         "query": r["question"], "answer": r["answer_cm"]}
                 rows.append(r)
     print(f"Loaded {len(rows)} rows from {args.csv}")
 

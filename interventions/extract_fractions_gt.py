@@ -17,9 +17,17 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
+import argparse
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 from PIL import Image
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from build_context_variants import load_mask  # noqa: E402
+from release_data import ITW_CSV, PHRASES_CSV, MASKS_DIR, ROOT, load_itw, require  # noqa: E402
 
 GRAY_BG = 127
 
@@ -63,32 +71,37 @@ def get_relevant_fraction(query: str, frac_width: float, frac_height: float) -> 
 def main():
     sys.stdout.reconfigure(line_buffering=True)
 
-    csv_path = "qwen3_235b_bundle/manifests/in_the_wild_context_5variants.csv"
-    image_dir = "qwen3_235b_bundle"
-    output_path = "in_the_wild_fractions_gt.csv"
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--csv", default=str(ITW_CSV))
+    ap.add_argument("--phrases", default=str(PHRASES_CSV))
+    ap.add_argument("--masks-dir", default=str(MASKS_DIR))
+    ap.add_argument("--output", default=str(ROOT / "in_the_wild_fractions_gt.csv"))
+    args = ap.parse_args()
+    output_path = args.output
 
-    df = pd.read_csv(csv_path)
-    # Only use object_only variants
-    df_obj = df[df["variant"] == "object_only"].reset_index(drop=True)
+    # Object masks from interventions/masks_from_release.py; the object_only canvas is the
+    # image gray-filled outside this mask, so its bbox is the mask's bbox.
+    require(Path(args.phrases), "sam_phrases CSV (run interventions/masks_from_release.py)")
+    q = load_itw(args.csv)
+    phr = pd.read_csv(args.phrases)[["image", "query", "sam_phrase"]]
+    df_obj = q.merge(phr, on=["image", "query"], how="left")
 
-    print(f"Computing fractions for {len(df_obj)} queries from object_only images")
+    print(f"Computing fractions for {len(df_obj)} queries from released masks")
 
     results = []
     for i, row in df_obj.iterrows():
-        img_path = os.path.join(image_dir, row["image"])
         query = str(row["query"]).strip()
         gt_cm = float(row["answer"])
+        mask = (load_mask(row["image"], row["sam_phrase"], Path(args.masks_dir))
+                if isinstance(row["sam_phrase"], str) else None)
 
-        if not os.path.exists(img_path):
-            print(f"[{i+1}/{len(df_obj)}] Image not found: {img_path}")
+        if mask is None:
+            print(f"[{i+1}/{len(df_obj)}] No mask for: {query}")
             results.append({
                 "image": row["image"], "query": query, "answer_cm": gt_cm,
                 "fraction_width": None, "fraction_height": None, "fraction_relevant": None,
             })
             continue
-
-        obj_img = np.array(Image.open(img_path).convert("RGB"))
-        mask = get_object_mask(obj_img)
 
         frac_w, frac_h = compute_bbox_fractions(mask)
         if frac_w is None:

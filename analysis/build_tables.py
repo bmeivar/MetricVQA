@@ -11,7 +11,7 @@ One table per storyline step:
   table_v3_typos.tex       — small follow-up
 
 Outputs:
-  paper/emnlp_paper/tables/<table>.tex
+  $METRICVQA_ROOT/outputs/tables/<table>.tex
 """
 
 from __future__ import annotations
@@ -23,9 +23,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+import sys as _sys
+_sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from release_data import load_itw, TABLES, FIGS  # noqa: E402
+
 REPO = Path(os.environ.get("METRICVQA_ROOT", "."))
 RES = REPO / "results"
-OUT = REPO / "paper/emnlp_paper/tables"
+OUT = TABLES
 OUT.mkdir(parents=True, exist_ok=True)
 
 
@@ -254,10 +258,15 @@ def distorted(slug, tag="distorted"):
 def baseline(name):
     if name == "llm_itw":
         # ChatGPT 5.5 on in-the-wild
-        gt = pd.read_csv(REPO / "questions_v2.csv")
-        df = pd.read_csv(REPO / "in-the-wild_chatgpt5.5.csv",
-                         header=0, names=["image", "query", "pred"])
-        m = df.merge(gt, on=["image", "query"])
+        # Text-only LLM prior on in-the-wild: not part of the public release; the row
+        # prints "--" unless the CSV (image, query, prediction) is placed in METRICVQA_ROOT.
+        p = REPO / "in-the-wild_chatgpt5.5.csv"
+        if not p.exists():
+            return None
+        gt = load_itw()
+        df = pd.read_csv(p, header=0, names=["image", "query", "pred"])
+        df["query"] = df["query"].str.strip().str.lower()
+        m = df.merge(gt.assign(query=gt["query"].str.strip().str.lower()), on=["image", "query"])
         e = (m["pred"] - m["answer"]).abs()
         rel = e / m["answer"].abs()
         return {"mae": float(e.mean()), "med": float(e.median()),
@@ -709,10 +718,11 @@ def table_distortion():
     def paired_rel(model_slug, dist_dir):
         """Return aligned (rel_full, rel_distorted) arrays on the paired
         (query, answer) intersection, or None if too few rows."""
-        f = pd.read_csv(RES / model_slug / "predictions.csv")
         d_path = RES / f"{dist_dir}_{model_slug}"
-        if not (d_path / "predictions.csv").exists():
+        if not (RES / model_slug / "predictions.csv").exists() \
+                or not (d_path / "predictions.csv").exists():
             return None
+        f = pd.read_csv(RES / model_slug / "predictions.csv")
         d = pd.read_csv(d_path / "predictions.csv")
         for df in (f, d):
             df["answer"] = pd.to_numeric(df["answer"], errors="coerce")

@@ -35,12 +35,17 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+import sys as _sys
+_sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from release_data import load_itw, TABLES, FIGS  # noqa: E402
+
 REPO = Path(os.environ.get("METRICVQA_ROOT", "."))
 RES = REPO / "results"
-SCRIPTS = REPO / "paper/rebuttal_arr_jul2026/scripts"
+SCRIPTS = RES
 CSV_OUT = SCRIPTS / "fdr_results.csv"
 CSV_BACKUP = SCRIPTS / "fdr_results_original.csv"
-TEX_OUT = REPO / "paper/emnlp_paper/tables/table_fdr.tex"
+TEX_OUT = TABLES / "table_fdr.tex"
+TABLES.mkdir(parents=True, exist_ok=True)
 
 B_PERM = 10_000
 Q_FDR = 0.05
@@ -125,6 +130,8 @@ def build_long() -> pd.DataFrame:
             df = df.copy()
             df["model"], df["cond"] = m, cond
             rows.append(df)
+    if not rows:
+        raise SystemExit(f"no prediction dirs found in {RES}; run the evaluations first")
     return pd.concat(rows, ignore_index=True)
 
 
@@ -236,8 +243,10 @@ def main():
     print("building long table...")
     long = build_long()
     n_cells = long.groupby(["model", "cond"]).size()
-    assert n_cells.shape[0] == len(MODELS) * len(CONDITIONS), \
-        f"expected {len(MODELS) * len(CONDITIONS)} (model, cond) cells, got {n_cells.shape[0]}"
+    if n_cells.shape[0] != len(MODELS) * len(CONDITIONS):
+        raise SystemExit(f"FDR over the paper's grid needs all {len(MODELS) * len(CONDITIONS)} "
+                         f"(model, condition) prediction dirs in {RES}; found "
+                         f"{n_cells.shape[0]} (MISSING lines above)")
 
     print("running 60 sign-flip tests + BH...")
     df = run_tests(long)
@@ -245,6 +254,11 @@ def main():
 
     # ── verify against the original rebuttal CSV before touching anything ──
     ref_path = CSV_BACKUP if CSV_BACKUP.exists() else CSV_OUT
+    if not ref_path.exists():  # first run: nothing to verify against
+        df.to_csv(CSV_OUT, index=False)
+        TEX_OUT.write_text(table_fdr(df))
+        print(f"wrote {CSV_OUT}\nwrote {TEX_OUT}")
+        return
     ref = pd.read_csv(ref_path)
     surv_new = set(map(tuple, df[df.sig_fdr][["model", "contrast"]].values))
     surv_ref = set(map(tuple, ref[ref.sig_fdr][["model", "contrast"]].values))

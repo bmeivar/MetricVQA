@@ -29,8 +29,9 @@ from tqdm import tqdm
 
 REPO = Path(os.environ.get("METRICVQA_ROOT",
                             Path(__file__).resolve().parent.parent))
-sys.path.insert(0, str(REPO))
-sys.path.insert(0, str(REPO / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))         # sibling builders
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # vlm_eval, handler_utils, release_data
+from release_data import ITW_CSV, ITW_IMAGES, PHRASES_CSV, MASKS_DIR, RESULTS, load_itw  # noqa: E402
 
 from handler_utils import load_vlm  # noqa: E402
 from vlm_eval import compute_metrics, parse_numeric_from_text  # noqa: E402
@@ -47,11 +48,11 @@ def model_short(model_id: str) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True, help="HF repo id (e.g. Qwen/Qwen2.5-VL-7B-Instruct)")
-    ap.add_argument("--csv", default=str(REPO / "questions_v2.csv"))
-    ap.add_argument("--phrases", default=str(REPO / "sam_phrases" / "sam_phrases_v1.csv"))
-    ap.add_argument("--images-dir", default=str(REPO / "images"))
-    ap.add_argument("--masks-dir", default=str(REPO / "sam_phrases" / "masks"))
-    ap.add_argument("--out-root", default=str(REPO / "results"))
+    ap.add_argument("--csv", default=str(ITW_CSV))
+    ap.add_argument("--phrases", default=str(PHRASES_CSV))
+    ap.add_argument("--images-dir", default=str(ITW_IMAGES))
+    ap.add_argument("--masks-dir", default=str(MASKS_DIR))
+    ap.add_argument("--out-root", default=str(RESULTS))
     ap.add_argument("--device", type=int, default=0)
     ap.add_argument("--dtype", default="fp16", choices=["auto", "fp16", "bf16", "fp32"])
     ap.add_argument("--trust-remote-code", action="store_true")
@@ -67,7 +68,7 @@ def main() -> None:
     print(f"variants: {args.variants}")
 
     # ----- load queries and phrases -----
-    df = pd.read_csv(args.csv)
+    df = load_itw(args.csv)
     phr = pd.read_csv(args.phrases)
     if "sam_phrase" not in df.columns:
         df = df.merge(phr[["image", "query", "sam_phrase"]],

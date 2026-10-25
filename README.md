@@ -50,10 +50,14 @@ python interventions/build_zoom_variants.py     # zoom-in 1.4x / zoom-out 0.6x
 python interventions/build_distorted_variants.py # radial lens distortion (barrel / pincushion)
 python interventions/build_target_plus_ref.py   # target + reference-object canvases
 python interventions/extract_fractions_gt.py    # well-posed fraction-probe ground truth
+python interventions/generate_zoom_crops.py     # natural scene-crop zoom (needs the fraction GT)
 ```
 
-The released dataset already contains verified masks, so step 1 of mask
-extraction is only needed for new images.
+The released dataset already contains verified masks, so `run_sam3_masks.py` is
+only needed for new images. Every builder reads and writes under `METRICVQA_ROOT`
+(paths in `release_data.py`) and writes a CSV next to its images
+(`questions_zoom_in.csv`, `questions_distorted.csv`, `questions_target_plus_ref.csv`,
+`manifests/in_the_wild_scene_zoom_*.csv`) that `vlm_eval.py --csv` takes directly.
 
 **3. LoRA fine-tuning on the Objectron split**
 
@@ -82,7 +86,10 @@ python analysis/build_tables.py                  # LaTeX tables
 ```
 
 Figure scripts in `figures/` regenerate the paper's radar plots, the Acc@k
-sweep, and the dataset composition figure.
+sweep, and the dataset composition figure. Tables and figures are written to
+`$METRICVQA_ROOT/outputs/{tables,figs}`. The analysis reads only the prediction
+directories you produced under `results/`; models or conditions you have not run
+are left out (shown as `--`).
 
 ## Evaluation conventions
 

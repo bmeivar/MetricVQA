@@ -19,6 +19,8 @@ Output: paper/emnlp_paper/figs/closed_radar.pdf
 
 from __future__ import annotations
 
+import os
+import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -27,9 +29,13 @@ import pandas as pd
 from matplotlib.lines import Line2D
 
 HERE = Path(__file__).parent
-REPO = HERE.parent.parent
+REPO = Path(os.environ.get("METRICVQA_ROOT", "."))
+sys.path.insert(0, str(HERE.parent))  # release_data
+from release_data import FIGS  # noqa: E402
 CSV = REPO / "results" / "frontier_deltas.csv"
-OUT = HERE.parent / "emnlp_paper" / "figs" / "closed_radar.pdf"
+OUT = FIGS / "closed_radar.pdf"
+if not CSV.exists():
+    raise SystemExit(f"{CSV} not found; run analysis/frontier_deltas.py first")
 
 
 def load_accs(bundle: str) -> dict[str, float | None]:

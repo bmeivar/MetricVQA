@@ -22,6 +22,10 @@ import numpy as np
 import sys
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parent / "analysis"))  # build_tables
+sys.path.insert(0, str(HERE.parent))  # release_data
+from release_data import FIGS, load_itw  # noqa: E402
+FIGS.mkdir(parents=True, exist_ok=True)
 from build_tables import MODELS, vision_itw, gray_itw, text_only_itw, baseline  # noqa: E402
 
 
@@ -152,6 +156,6 @@ for spine in ("top", "right"):
 ax.legend(loc="lower right", fontsize=8.5, frameon=True, framealpha=0.95)
 
 fig.tight_layout()
-OUT = HERE.parent / "emnlp_paper" / "figs" / "prior_vs_pixel.pdf"
+OUT = FIGS / "prior_vs_pixel.pdf"
 fig.savefig(OUT, bbox_inches="tight")
 print(f"wrote {OUT}")

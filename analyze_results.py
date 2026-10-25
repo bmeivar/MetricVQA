@@ -38,6 +38,9 @@ def load_all_predictions(results_dir: Path) -> dict[str, pd.DataFrame]:
             # normalise column name (float_qwen_7 has an extra column)
             if "Number predicted_value_cm" in df.columns:
                 df = df.drop(columns=["Number predicted_value_cm"])
+            # only cm predictions (skips e.g. the well-posed fraction probe)
+            if not {"answer", "predicted_value_cm"} <= set(df.columns):
+                continue
             # coerce to numeric; un-parseable predictions become NaN
             df["answer"] = pd.to_numeric(df["answer"], errors="coerce")
             df["predicted_value_cm"] = pd.to_numeric(
@@ -330,6 +333,8 @@ def plot_cumulative_accuracy(datasets: dict[str, pd.DataFrame], save_path: Path)
 
 def main():
     print("Loading predictions …")
+    if not RESULTS_DIR.is_dir():
+        raise SystemExit(f"{RESULTS_DIR} not found; run vlm_eval.py first")
     raw = load_all_predictions(RESULTS_DIR)
     datasets = {m: add_error_columns(df) for m, df in raw.items()}
 

@@ -26,7 +26,9 @@ from PIL import Image
 
 REPO = Path(os.environ.get("METRICVQA_ROOT",
                             Path(__file__).resolve().parent.parent))
-sys.path.insert(0, str(REPO / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))         # sibling builders
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # release_data
+from release_data import ITW_CSV, ITW_IMAGES, PHRASES_CSV, MASKS_DIR, load_itw  # noqa: E402
 from build_context_variants import load_mask, slug  # noqa: E402
 
 
@@ -76,10 +78,10 @@ def shrink_and_pad(img: np.ndarray, k: float, gray: int = 127) -> np.ndarray:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--csv", default=str(REPO / "questions_v3.csv"))
-    ap.add_argument("--phrases", default=str(REPO / "sam_phrases" / "sam_phrases_v1.csv"))
-    ap.add_argument("--images-dir", default=str(REPO / "images"))
-    ap.add_argument("--masks-dir", default=str(REPO / "sam_phrases" / "masks"))
+    ap.add_argument("--csv", default=str(ITW_CSV))
+    ap.add_argument("--phrases", default=str(PHRASES_CSV))
+    ap.add_argument("--images-dir", default=str(ITW_IMAGES))
+    ap.add_argument("--masks-dir", default=str(MASKS_DIR))
     ap.add_argument("--out-root", default=str(REPO))
     ap.add_argument("-k", "--k", type=float, default=0.15,
                     help="Barrel distortion coefficient (0.10-0.20 subtle, "
@@ -99,7 +101,7 @@ def main():
     out_dir = out_root / f"images_distorted{suf}"
     out_dir.mkdir(exist_ok=True)
 
-    questions = pd.read_csv(args.csv)
+    questions = load_itw(args.csv)
     phrases = pd.read_csv(args.phrases)
     # case-insensitive merge so v3 (Capitalized) joins to sam_phrases (lowercase)
     questions["_qkey"] = questions["query"].str.strip().str.lower()

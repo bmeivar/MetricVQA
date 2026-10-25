@@ -19,6 +19,10 @@ import numpy as np
 import sys
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parent / "analysis"))  # build_tables
+sys.path.insert(0, str(HERE.parent))  # release_data
+from release_data import FIGS, load_itw  # noqa: E402
+FIGS.mkdir(parents=True, exist_ok=True)
 from build_tables import (  # noqa: E402
     MODELS, vision_itw, gray_itw, zoom_in, zoom_out,
     context_variant, distorted, metrics_from, RES,
@@ -185,9 +189,9 @@ all_records.sort(key=lambda r: (-r[2] if not np.isnan(r[2]) else 1e9))
 # Body: all 12 models in a 4x3 grid (test whether the body still fits 8pp)
 subset_records = [(label, base_acc, vals) for slug, label, base_acc, vals in all_records]
 render_panels(subset_records, n_cols=4, n_rows=3, figsize=(11.5, 8.4),
-              output_path=HERE.parent / "emnlp_paper" / "figs" / "intervention_radar.pdf")
+              output_path=FIGS / "intervention_radar.pdf")
 
 # Appendix: all 12, 4x3 grid
 full_records = [(label, base_acc, vals) for slug, label, base_acc, vals in all_records]
 render_panels(full_records, n_cols=4, n_rows=3, figsize=(11.5, 8.4),
-              output_path=HERE.parent / "emnlp_paper" / "figs" / "intervention_radar_full.pdf")
+              output_path=FIGS / "intervention_radar_full.pdf")

@@ -22,9 +22,14 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+import sys as _sys
+_sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from release_data import load_itw, TABLES, FIGS  # noqa: E402
+
 REPO = Path(os.environ.get("METRICVQA_ROOT", "."))
 RES = REPO / "results" / "scene_zoom"
-OUT_TABLE = REPO / "paper/emnlp_paper/tables/table_scene_zoom.tex"
+OUT_TABLE = TABLES / "table_scene_zoom.tex"
+TABLES.mkdir(parents=True, exist_ok=True)
 OUT_CSV = REPO / "results/scene_zoom_summary.csv"
 
 # (dir prefix, display label) — the 8 paper models the rebuttal reports.
@@ -76,6 +81,10 @@ def main() -> None:
     rows, csv_rows = [], []
     pooled = {c: [] for c in CONTRASTS}
     for mdir, label in MODELS:
+        if not all((RES / f"{mdir}_scene_zoom_{DIR_SUFFIX[c]}" / "predictions.csv").exists()
+                   for c in CONDITIONS):
+            print(f"{label:16s} skipped (scene_zoom predictions not in {RES})")
+            continue
         conds = {c: load(mdir, c) for c in CONDITIONS}
         accs = {c: conds[c]["correct"].mean() * 100 for c in CONDITIONS}
         pvals = {}
@@ -113,6 +122,9 @@ def main() -> None:
                   f"{a}/{b}:{gm_ratio[(a,b)]:.2f}({pvals[(a,b)]:.3f})"
                   for a, b in CONTRASTS))
 
+    if not rows:
+        raise SystemExit(f"no scene_zoom predictions in {RES}; run vlm_eval.py on "
+                         "manifests/in_the_wild_scene_zoom_*.csv first")
     pooled_p = {}
     for c in CONTRASTS:
         diffs = np.concatenate(pooled[c])
@@ -122,6 +134,7 @@ def main() -> None:
     csv_rows.append({"model": "POOLED",
                      **{f"p_{a}_vs_{b}": round(pooled_p[(a, b)], 4)
                         for a, b in CONTRASTS}})
+    OUT_CSV.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(csv_rows).to_csv(OUT_CSV, index=False)
 
     tex = []

@@ -17,6 +17,10 @@ import pandas as pd
 
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parent / "analysis"))  # build_tables
+sys.path.insert(0, str(HERE.parent))  # release_data
+from release_data import FIGS, load_itw  # noqa: E402
+FIGS.mkdir(parents=True, exist_ok=True)
 from build_tables import (  # noqa: E402
     MODELS, REPO, RES, vision_itw, vision_obj, baseline,
 )
@@ -40,10 +44,13 @@ def rel_errors(d: Path):
 
 def llm_itw_rel_errors():
     """ChatGPT 5.5 on in-the-wild: stored as a flat CSV, not a model dir."""
-    gt = pd.read_csv(REPO / "questions_v2.csv")
-    df = pd.read_csv(REPO / "in-the-wild_chatgpt5.5.csv",
-                     header=0, names=["image", "query", "pred"])
-    m = df.merge(gt, on=["image", "query"])
+    p = REPO / "in-the-wild_chatgpt5.5.csv"  # not in the public release: curve omitted
+    if not p.exists():
+        return None
+    gt = load_itw()
+    df = pd.read_csv(p, header=0, names=["image", "query", "pred"])
+    df["query"] = df["query"].str.strip().str.lower()
+    m = df.merge(gt.assign(query=gt["query"].str.strip().str.lower()), on=["image", "query"])
     e = (m["pred"] - m["answer"]).abs()
     return (e / m["answer"].abs().clip(lower=1e-6)).values
 
@@ -130,6 +137,6 @@ fig.legend(handles, labels, loc="lower center", ncol=5, fontsize=8,
 # suptitle removed: LaTeX caption is the figure's only title
 fig.tight_layout(rect=(0, 0.10, 1, 1.0))
 
-OUT = HERE.parent / "emnlp_paper" / "figs" / "acc_at_k.pdf"
+OUT = FIGS / "acc_at_k.pdf"
 fig.savefig(OUT, bbox_inches="tight")
 print(f"wrote {OUT}")

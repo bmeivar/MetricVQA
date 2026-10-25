@@ -15,9 +15,12 @@ warnings.filterwarnings("ignore")
 
 import numpy as np
 import pandas as pd
+from pathlib import Path
 from PIL import Image
 
-from handler_utils import load_vlm
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from handler_utils import load_vlm  # noqa: E402
+from release_data import ROOT, ITW_IMAGES, require  # noqa: E402
 
 FRACTION_PROMPT = """Look at the image carefully. {query_text}
 Answer with a single decimal number between 0 and 1 representing the fraction. For example, 0.25 means the object spans 25% of the image {dimension}."""
@@ -77,8 +80,9 @@ def parse_fraction(text: str):
 def main():
     parser = argparse.ArgumentParser(description="Well-posed fraction estimation (local models)")
     parser.add_argument("--model", required=True, help="HuggingFace model ID")
-    parser.add_argument("--fractions-gt", default="in_the_wild_fractions_gt.csv")
-    parser.add_argument("--image-dir", default="qwen3_235b_bundle")
+    parser.add_argument("--fractions-gt", default=str(ROOT / "in_the_wild_fractions_gt.csv"),
+                        help="written by interventions/extract_fractions_gt.py")
+    parser.add_argument("--image-dir", default=str(ITW_IMAGES))
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--device", type=int, default=0)
     parser.add_argument("--dtype", default="bf16")
@@ -92,10 +96,9 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
 
     # Load GT fractions
-    gt_df = pd.read_csv(args.fractions_gt)
-    gt_df["original_image"] = gt_df["image"].str.replace(
-        "images/context/", "images/itw_vision/"
-    ).str.replace(r"__.*$", ".png", regex=True)
+    gt_df = pd.read_csv(require(Path(args.fractions_gt), "fractions GT"))
+    # image is the bare file name inside --image-dir (extract_fractions_gt.py output)
+    gt_df["original_image"] = gt_df["image"]
 
     # If manifest provided, override images with the manifest's images
     if args.manifest:

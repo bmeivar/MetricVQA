@@ -29,6 +29,10 @@ import pandas as pd
 
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parent / "analysis"))  # build_tables
+sys.path.insert(0, str(HERE.parent))  # release_data
+from release_data import FIGS, load_itw  # noqa: E402
+FIGS.mkdir(parents=True, exist_ok=True)
 from build_tables import (  # noqa: E402
     REPO, RES, vision_itw, gray_itw, zoom_in, zoom_out,
     context_variant, metrics_from,
@@ -362,7 +366,7 @@ def _render_panels(axes, panel_data, ymax, yticks):
                   fontsize=8, frameon=False)
 
 
-OUT_DIR = HERE.parent / "emnlp_paper" / "figs"
+OUT_DIR = FIGS
 
 # ─── The 3 paper-pool LoRA variants, 1x3 horizontal grid ──────────────────
 render_lora_radar(

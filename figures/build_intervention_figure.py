@@ -21,6 +21,10 @@ import numpy as np
 import sys
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parent / "analysis"))  # build_tables
+sys.path.insert(0, str(HERE.parent))  # release_data
+from release_data import FIGS, load_itw  # noqa: E402
+FIGS.mkdir(parents=True, exist_ok=True)
 from build_tables import (  # noqa: E402
     MODELS, vision_itw, gray_itw, zoom_in, zoom_out,
     context_variant, distorted,
@@ -128,6 +132,6 @@ fig.suptitle(
 
 fig.tight_layout(rect=(0, 0.03, 1, 0.97))
 
-OUT = HERE / "figs" / "intervention_decomposition.pdf"
+OUT = FIGS / "intervention_decomposition.pdf"
 fig.savefig(OUT, bbox_inches="tight")
 print(f"wrote {OUT}")

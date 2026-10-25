@@ -47,9 +47,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+import sys as _sys
+_sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from release_data import load_itw, TABLES, FIGS  # noqa: E402
+
 REPO = Path(os.environ.get("METRICVQA_ROOT", "."))
 RES = REPO / "results"
-OUT_TABLES = REPO / "paper/emnlp_paper/tables"
+OUT_TABLES = TABLES
 
 HUMAN_REF_ACC = 39.3  # human baseline, ITW Acc@10% (numbers.md)
 
@@ -290,6 +294,9 @@ def main():
     results = {}
     for bundle, label in BUNDLES:
         print(f"== {bundle}")
+        if not (RES / bundle).is_dir():
+            print(f"  skipped ({RES / bundle} not found)")
+            continue
         conds = load_closed_bundle(bundle)
         rows = compute_bundle(conds)
         results[bundle] = {r["name"]: r for r in rows}
@@ -302,19 +309,23 @@ def main():
     results["qwen3-vl-235b"] = {r["name"]: r for r in qrows}
     for r in qrows:
         all_rows.append({"bundle": "qwen3-vl-235b_open", **r})
+    if not all_rows:
+        raise SystemExit(f"no frontier/closed-model predictions in {RES}")
 
     df = pd.DataFrame(all_rows)[["bundle", "name", "kind", "n", "n_parsable",
                                  "value", "acc_ref", "acc_cond"]]
 
     # ── sanity anchors (convention-invariant rebuttal values) ──────────────
-    nr = results["gpt-5.5-no-reasoning_bundle"]
-    v = nr["vision"]["value"]
-    ident = nr["identity(wrong_obj-obj_only)"]["value"]
-    assert abs(v - 41.4) <= 0.2, f"GPT-5.5-nr vision {v:.2f} != 41.4"
-    assert abs(ident - (-16.4)) <= 0.2, f"GPT-5.5-nr identity {ident:.2f} != -16.4"
-    print(f"\nsanity OK: GPT-5.5-nr vision={v:.1f}%, identity={ident:+.1f}pp")
+    nr = results.get("gpt-5.5-no-reasoning_bundle")
+    if nr and "vision" in nr and "identity(wrong_obj-obj_only)" in nr:
+        v = nr["vision"]["value"]
+        ident = nr["identity(wrong_obj-obj_only)"]["value"]
+        assert abs(v - 41.4) <= 0.2, f"GPT-5.5-nr vision {v:.2f} != 41.4"
+        assert abs(ident - (-16.4)) <= 0.2, f"GPT-5.5-nr identity {ident:.2f} != -16.4"
+        print(f"\nsanity OK: GPT-5.5-nr vision={v:.1f}%, identity={ident:+.1f}pp")
 
     out_csv = RES / "frontier_deltas.csv"
+    out_csv.parent.mkdir(parents=True, exist_ok=True)
     df.round(2).to_csv(out_csv, index=False)
     print(f"wrote {out_csv} ({len(df)} rows)")
 

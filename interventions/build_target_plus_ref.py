@@ -168,3 +168,44 @@ def enumerate_pairs(queries_df,
                     "ref_is_reference_only": r["is_reference_only"],
                 })
     return pairs
+
+
+def main() -> None:
+    """Write every (target, ref) canvas and a manifest for vlm_eval.py:
+    images_target_plus_ref/<stem>__t=<target>__r=<ref>.png + questions_target_plus_ref.csv."""
+    import argparse
+    import sys
+    import pandas as pd
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from release_data import ITW_IMAGES, PHRASES_CSV, MASKS_DIR, ROOT, require
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--phrases", default=str(PHRASES_CSV))
+    ap.add_argument("--images-dir", default=str(ITW_IMAGES))
+    ap.add_argument("--masks-dir", default=str(MASKS_DIR))
+    ap.add_argument("--out-root", default=str(ROOT))
+    args = ap.parse_args()
+
+    phrases = pd.read_csv(require(Path(args.phrases),
+                                  "sam_phrases CSV (run interventions/masks_from_release.py)"))
+    out_dir = Path(args.out_root) / "images_target_plus_ref"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    rows, missing = [], 0
+    for pr in enumerate_pairs(None, phrases, Path(args.masks_dir)):
+        img = build_target_plus_ref(pr["image"], pr["target_phrase"], pr["ref_phrase"],
+                                    Path(args.images_dir), Path(args.masks_dir))
+        if img is None:
+            missing += 1
+            continue
+        name = (f"{Path(pr['image']).stem}__t={slug(pr['target_phrase'])}"
+                f"__r={slug(pr['ref_phrase'])}.png")
+        img.save(out_dir / name)
+        rows.append({"image": name, "query": pr["target_query"], "answer": pr["target_answer"],
+                     "ref_phrase": pr["ref_phrase"]})
+    csv = Path(args.out_root) / "questions_target_plus_ref.csv"
+    pd.DataFrame(rows).to_csv(csv, index=False)
+    print(f"{len(rows)} canvases -> {out_dir} ({missing} skipped)\nmanifest -> {csv}")
+
+
+if __name__ == "__main__":
+    main()

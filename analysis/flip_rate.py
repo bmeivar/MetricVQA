@@ -55,10 +55,15 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+import sys as _sys
+_sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from release_data import load_itw, TABLES, FIGS  # noqa: E402
+
 REPO = Path(os.environ.get("METRICVQA_ROOT", "."))
 RES = REPO / "results"
 OUT_CSV = RES / "flip_rate_summary.csv"
-OUT_TEX = REPO / "paper/emnlp_paper/tables/table_flip_rate.tex"
+OUT_TEX = TABLES / "table_flip_rate.tex"
+TABLES.mkdir(parents=True, exist_ok=True)
 
 # 11 open models (build_tables.py pool minus Molmo-7B-D, which refuses
 # text-only), light to heavy.
@@ -98,10 +103,8 @@ def correct_series(df: pd.DataFrame, pred_col: str) -> pd.Series:
 
 # ── canonical 331-row ITW frame (same construction as rebuttal_numbers.py) ──
 def build_canon():
-    prior = pd.read_csv(REPO / "in-the-wild_chatgpt5.5.csv")
-    prior.columns = ["image", "query", "prior"]
-    qv2 = pd.read_csv(REPO / "questions_v2.csv")
-    canon = prior.merge(qv2, on=["image", "query"], how="left")
+    # 331 released in-the-wild queries, in release order (same rows as the paper's frame).
+    canon = load_itw()[["image", "query", "answer"]].copy()
     canon["nq"] = norm_q(canon["query"])
     canon["gt"] = pd.to_numeric(canon["answer"], errors="coerce")
     canon["rid"] = np.arange(len(canon))
@@ -148,7 +151,10 @@ def churn_counts(j: pd.DataFrame) -> dict:
 
 
 # ── primary computation ─────────────────────────────────────────────────────
-def open_churn(slug: str) -> dict:
+def open_churn(slug: str) -> dict | None:
+    if not ((RES / f"text_only_{slug}" / "predictions.csv").exists()
+            and (RES / slug / "predictions.csv").exists()):
+        return None
     t = map_rid(pd.read_csv(RES / f"text_only_{slug}" / "predictions.csv"))
     v = map_rid(pd.read_csv(RES / slug / "predictions.csv"))
     t["c"] = correct_series(t, "predicted_value_cm")
@@ -160,7 +166,10 @@ def open_churn(slug: str) -> dict:
     return churn_counts(j)
 
 
-def closed_churn(bundle: str) -> dict:
+def closed_churn(bundle: str) -> dict | None:
+    if not ((RES / bundle / "in_the_wild_text_only" / "predictions.csv").exists()
+            and (RES / bundle / "in_the_wild_vision" / "predictions.csv").exists()):
+        return None
     t = pd.read_csv(RES / bundle / "in_the_wild_text_only" / "predictions.csv")
     v = pd.read_csv(RES / bundle / "in_the_wild_vision" / "predictions.csv")
     for df in (t, v):
@@ -192,13 +201,16 @@ def legacy_open_pool() -> dict:
     tot = {"n_joined": 0, "n_prior_correct": 0, "n_flipped": 0,
            "n_prior_wrong": 0, "n_fixed": 0}
     for slug, _ in OPEN_MODELS:
+        if not ((RES / f"text_only_{slug}" / "predictions.csv").exists()
+                and (RES / slug / "predictions.csv").exists()):
+            continue
         j = (load(RES / f"text_only_{slug}").rename(columns={"c": "c_t"})
              .merge(load(RES / slug).rename(columns={"c": "c_v"}), on="key"))
         c = churn_counts(j)
         for k in tot:
             tot[k] += c[k]
-    tot["flip_rate"] = tot["n_flipped"] / tot["n_prior_correct"]
-    tot["fix_rate"] = tot["n_fixed"] / tot["n_prior_wrong"]
+    tot["flip_rate"] = tot["n_flipped"] / tot["n_prior_correct"] if tot["n_prior_correct"] else float("nan")
+    tot["fix_rate"] = tot["n_fixed"] / tot["n_prior_wrong"] if tot["n_prior_wrong"] else float("nan")
     return tot
 
 
@@ -304,6 +316,9 @@ def main():
           f"{'flip%':>6s} {'prior-wrong':>11s} {'fixed':>6s} {'fix%':>6s}")
     for slug, label in OPEN_MODELS:
         c = open_churn(slug)
+        if c is None:
+            print(f"{label:32s} skipped (no text_only/vision predictions in results/)")
+            continue
         rows.append((label, c, "open"))
         for k in pooled:
             pooled[k] += c[k]
@@ -311,6 +326,9 @@ def main():
               f"{c['n_flipped']:8d} {100 * c['flip_rate']:5.0f}% "
               f"{c['n_prior_wrong']:11d} {c['n_fixed']:6d} {100 * c['fix_rate']:5.0f}%")
 
+    if pooled["n_joined"] == 0:
+        raise SystemExit("no model has both text_only_<model>/ and <model>/ predictions in "
+                         f"{RES}; run vlm_eval.py and text_only_baseline.py first")
     pooled["flip_rate"] = pooled["n_flipped"] / pooled["n_prior_correct"]
     pooled["fix_rate"] = pooled["n_fixed"] / pooled["n_prior_wrong"]
     rows.append(("Open pool (11 models, pooled)", pooled, "pooled"))
@@ -322,6 +340,9 @@ def main():
     primary_closed = {}
     for bundle, label in CLOSED_BUNDLES:
         c = closed_churn(bundle)
+        if c is None:
+            print(f"{label:32s} skipped (bundle not in results/)")
+            continue
         primary_closed[bundle] = c
         rows.append((label, c, "closed"))
         print(f"{label:32s} {c['n_joined']:4d} {c['n_prior_correct']:10d} "
@@ -341,7 +362,12 @@ def main():
           f"({100 * pooled['flip_rate']:.0f}%), fixes "
           f"{pooled['n_fixed']}/{pooled['n_prior_wrong']} "
           f"({100 * pooled['fix_rate']:.0f}%)")
-    acceptance(primary_closed, legacy)
+    # The acceptance numbers are the paper's; they only apply with every model present.
+    if len(primary_closed) == len(CLOSED_BUNDLES) and \
+            sum(k == "open" for _, _, k in rows) == len(OPEN_MODELS):
+        acceptance(primary_closed, legacy)
+    else:
+        print("acceptance vs paper numbers skipped (not all models in results/)")
 
     # CSV
     csv_rows = []
